@@ -402,55 +402,81 @@ cam_data_t init_cam(const char *dev_name){
     PRINT(cap.capabilities,"%x");
     cd.cap=cap;
 
-    struct v4l2_query_ext_ctrl queryctrl={0};
-    for(int i=V4L2_CID_BASE;i<V4L2_CID_LASTP1;i++){
-        queryctrl.id=i;
-        if(-1!=ioctl(fd,VIDIOC_QUERY_EXT_CTRL,&queryctrl)){
-            PRINT(queryctrl.name,"%s");
-            switch(queryctrl.type){
-                #define CASE(x) \
-                    case x: \
-                        printf("\t%s:%d\n",#x,x);
+    // #define num_ranges (8)
+    const int ranges[][2]={
+        {V4L2_CID_USER_BASE,43},
+        {V4L2_CID_MPEG_BASE,644},
+        {V4L2_CID_CAMERA_CLASS_BASE,51},
+        {V4L2_CID_JPEG_CLASS_BASE,7},
+        {V4L2_CID_IMAGE_SOURCE_CLASS_BASE,7},
+        {V4L2_CID_IMAGE_PROC_CLASS_BASE,5},
+        {V4L2_CID_RF_TUNER_CLASS_BASE,91},
+        {V4L2_CID_DETECT_CLASS_BASE,4},
+    };
+    const int num_ranges=sizeof(ranges)/sizeof(ranges[0]);
 
-                CASE(V4L2_CTRL_TYPE_INTEGER       );
-                    break;
-                CASE(V4L2_CTRL_TYPE_BOOLEAN       );
-                    break;
-                CASE(V4L2_CTRL_TYPE_MENU          );
-                    break;
-                CASE(V4L2_CTRL_TYPE_BUTTON        );
-                    break;
-                CASE(V4L2_CTRL_TYPE_INTEGER64     );
-                    break;
-                CASE(V4L2_CTRL_TYPE_CTRL_CLASS    );
-                    break;
-                CASE(V4L2_CTRL_TYPE_STRING        );
-                    break;
-                CASE(V4L2_CTRL_TYPE_BITMASK       );
-                    break;
-                CASE(V4L2_CTRL_TYPE_INTEGER_MENU  );
-                    break;
-                #undef CASE
+    for(int j=0;j<num_ranges;j++){
+        struct v4l2_query_ext_ctrl queryctrl={0};
+        for(int i=ranges[j][0];i<=ranges[j][0]+ranges[j][1];i++){
+            queryctrl.id=i;
+            if(-1!=ioctl(fd,VIDIOC_QUERY_EXT_CTRL,&queryctrl)){
+                PRINT(queryctrl.name,"%s");
+                switch(queryctrl.type){
+                    #define CASE(x) \
+                        case x: \
+                            printf("\t%s:0x%x\n",#x,x);
+
+                    CASE(V4L2_CTRL_TYPE_INTEGER       );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_BOOLEAN       );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_MENU          );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_BUTTON        );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_INTEGER64     );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_CTRL_CLASS    );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_STRING        );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_BITMASK       );
+                        break;
+                    CASE(V4L2_CTRL_TYPE_INTEGER_MENU  );
+                        break;
+                    #undef CASE
+                }
+                printf("\tid:0x%x\n",queryctrl.id);
+                printf("\tmin:%lld\n",queryctrl.minimum);
+                printf("\tmax:%lld\n",queryctrl.maximum);
+                printf("\tdefault:%lld\n",queryctrl.default_value);
+
+                struct v4l2_control control;
+                control.id=queryctrl.id;
+                control.value=queryctrl.default_value;
+                assert(control.value==queryctrl.default_value);
+                ioctl(fd,VIDIOC_S_CTRL,&control);
+
+                if(-1!=SYSCALL_NOEXIT(ioctl(fd,VIDIOC_G_CTRL,&control))){
+                    printf("\tcurrent:%d\n",control.value);
+                }
+
+                puts("");
             }
-            printf("\tid:%d\n",queryctrl.id);
-            printf("\tmin:%lld\n",queryctrl.minimum);
-            printf("\tmax:%lld\n",queryctrl.maximum);
-            printf("\tdefault:%lld\n",queryctrl.default_value);
 
-            struct v4l2_control control;
-            control.id=queryctrl.id;
-            control.value=queryctrl.default_value;
-            assert(control.value==queryctrl.default_value);
-            ioctl(fd,VIDIOC_S_CTRL,&control);
-
-            if(-1!=SYSCALL_NOEXIT(ioctl(fd,VIDIOC_G_CTRL,&control))){
-                printf("\tcurrent:%d\n",control.value);
-            }
-
-            puts("");
         }
-
     }
+
+    struct v4l2_control control;
+    control.id=V4L2_CID_EXPOSURE_AUTO;
+    control.value=1;
+    SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
+
+    // struct v4l2_control control;
+    control.id=0x009a0902;
+    control.value=315;
+    // SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
+
 
     struct v4l2_fmtdesc fmtdesc={0};
     fmtdesc.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -502,8 +528,10 @@ cam_data_t init_cam(const char *dev_name){
     struct v4l2_format fmt={0};
     fmt.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-    fmt.fmt.pix.width=608;
-    fmt.fmt.pix.height=512;
+    fmt.fmt.pix.width=1280;
+    fmt.fmt.pix.height=720;
+    // fmt.fmt.pix.width=640;
+    // fmt.fmt.pix.height=480;
     fmt.fmt.pix.pixelformat=pixel_format;
     fmt.fmt.pix.field=V4L2_FIELD_NONE;
 
@@ -730,7 +758,7 @@ int main(){
 
     bool running=true;
     while(running){
-        const float aspect=cd.h/(float)cd.w;
+        const float aspect=(cd.h/(float)cd.w)*(win_w/(float)win_h);
         int root_x,root_y,win_x,win_y;
         Window child;
         Window root;
