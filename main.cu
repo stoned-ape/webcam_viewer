@@ -29,7 +29,7 @@ _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"");
 #include <linux/videodev2.h>
 
 #define SYSCALL_NOEXIT(call)({ \
-    __auto_type syscall_ret=call; \
+    auto syscall_ret=call; \
     if(syscall_ret==(typeof(call))-1){ \
         fprintf(stderr,"syscall error: %d (%s) in function %s at line %d of file %s\n", \
             errno,strerror(errno),__func__,__LINE__,__FILE__); \
@@ -40,10 +40,20 @@ _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"");
 
 //exits on error
 #define SYSCALL(call)({ \
-    __auto_type syscall_ret=SYSCALL_NOEXIT(call); \
+    auto syscall_ret=SYSCALL_NOEXIT(call); \
     if(syscall_ret==(typeof(call))-1) exit(errno); \
     syscall_ret; \
 })
+
+#define CUDA(call){ \
+    cudaError_t err=(call); \
+    if(err!=0){ \
+        fprintf(stderr,"%d -> CUDA(%s) error(%s) in function %s in file %s \n", \
+            __LINE__,#call,cudaGetErrorString(err),__func__,__FILE__); \
+        exit(1); \
+    } \
+}
+
 
 #define PRINT(val,type) printf("%s:\t" type "\n",#val,val);
 
@@ -135,10 +145,10 @@ void make_bmp(const char *file_name,int width,int height,void *pixels){
     SYSCALL(close(bmp));
 }
 
-typedef __attribute__((vector_size(8))) float float2;
+typedef __attribute__((vector_size(8))) float _float2;
 
-float2 make_float2(float x,float y){
-    float2 f={x,y};
+_float2 make__float2(float x,float y){
+    _float2 f={x,y};
     return f;
 }
 
@@ -147,7 +157,7 @@ float map(float t,float t0,float t1,float s0,float s1){
 }
 
 
-float2 map2(float2 t,float2 t0,float2 t1,float2 s0,float2 s1){
+_float2 map2(_float2 t,_float2 t0,_float2 t1,_float2 s0,_float2 s1){
     return s0+(s1-s0)*(t-t0)/(t1-t0);
 }
 
@@ -156,13 +166,13 @@ float2 map2(float2 t,float2 t0,float2 t1,float2 s0,float2 s1){
 #define clamp(x,a,b) min(max(x,a),b)
 
 typedef struct{
-    float2 corner;
-    float2 size;
+    _float2 corner;
+    _float2 size;
 }rect;
 
 typedef struct{
-    float2 image_size;
-    float2 screen_size;
+    _float2 image_size;
+    _float2 screen_size;
     rect image_rect;
     rect screen_rect;
     float new_scale;
@@ -170,34 +180,34 @@ typedef struct{
     float max_scale;
     float min_scale;
     bool panning;
-    float2 old_center;
+    _float2 old_center;
 }zoomer_t;
 
-void zoomer_init(zoomer_t *self,float2 _image_size,float2 _screen_size){
+void zoomer_init(zoomer_t *self,_float2 _image_size,_float2 _screen_size){
     self->panning=false;
     self->new_scale=1;
     self->old_scale=1;
     self->image_size=_image_size;
     self->screen_size=_screen_size;
-    self->image_rect.corner=make_float2(0,0);
-    self->screen_rect.corner=make_float2(0,0);
+    self->image_rect.corner=make__float2(0,0);
+    self->screen_rect.corner=make__float2(0,0);
     self->image_rect.size=_image_size;
     self->screen_rect.size=_screen_size;
     self->max_scale=200;
     self->min_scale=1;
-    self->old_center=make_float2(.5f,.5f);
+    self->old_center=make__float2(.5f,.5f);
 }
 
-void zoomer_do_zoom(zoomer_t *self,const float2 center,const float delta_scale){
+void zoomer_do_zoom(zoomer_t *self,const _float2 center,const float delta_scale){
     self->new_scale=clamp(self->new_scale*delta_scale,self->min_scale,self->max_scale);
 
-    const float2 screen_tl=self->screen_rect.corner;
-    const float2 screen_br=self->screen_rect.corner+self->screen_rect.size;
+    const _float2 screen_tl=self->screen_rect.corner;
+    const _float2 screen_br=self->screen_rect.corner+self->screen_rect.size;
 
-    float2 image_tl=self->image_rect.corner;
-    float2 image_br=self->image_rect.corner+self->image_rect.size;
+    _float2 image_tl=self->image_rect.corner;
+    _float2 image_br=self->image_rect.corner+self->image_rect.size;
 
-    const float2 image_center=map2(center,screen_tl,screen_br,image_tl,image_br);
+    const _float2 image_center=map2(center,screen_tl,screen_br,image_tl,image_br);
 
     const float scale_ratio=self->new_scale/self->old_scale;
 
@@ -227,12 +237,12 @@ void zoomer_do_zoom(zoomer_t *self,const float2 center,const float delta_scale){
     self->old_center=center;
 }
 
-void zoomer_begin_pan(zoomer_t *self,const float2 center){
+void zoomer_begin_pan(zoomer_t *self,const _float2 center){
     self->panning=true;
     self->old_center=center;
 }
 
-void zoomer_repeat_pan(zoomer_t *self,const float2 center){
+void zoomer_repeat_pan(zoomer_t *self,const _float2 center){
     if(!self->panning) return;
     self->image_rect.corner-=(center-self->old_center)/self->new_scale;
     zoomer_do_zoom(self,center,1);
@@ -242,14 +252,14 @@ void zoomer_end_pan(zoomer_t *self){
     self->panning=false;
 }
 
-void glTexCoord(float2 v){
+void glTexCoord(_float2 v){
     glTexCoord2fv((float*)&v);
 }
-void glVertex(float2 v){
+void glVertex(_float2 v){
     glVertex2fv((float*)&v);
 }
 
-void stretch_blt(float2 dst_corner,float2 dst_size,float2 src_corner,float2 src_size){
+void stretch_blt(_float2 dst_corner,_float2 dst_size,_float2 src_corner,_float2 src_size){
     glPushMatrix();
     glScalef(1,-1,1);
     glTranslatef(-1,-1,0);
@@ -259,17 +269,17 @@ void stretch_blt(float2 dst_corner,float2 dst_size,float2 src_corner,float2 src_
     glColor3f(1,1,1);
     glBegin(GL_TRIANGLE_STRIP);
 
-    glTexCoord(src_corner+src_size*make_float2(0,0));
-    glVertex(  dst_corner+dst_size*make_float2(0,0));
+    glTexCoord(src_corner+src_size*make__float2(0,0));
+    glVertex(  dst_corner+dst_size*make__float2(0,0));
 
-    glTexCoord(src_corner+src_size*make_float2(0,1));
-    glVertex(  dst_corner+dst_size*make_float2(0,1));
+    glTexCoord(src_corner+src_size*make__float2(0,1));
+    glVertex(  dst_corner+dst_size*make__float2(0,1));
 
-    glTexCoord(src_corner+src_size*make_float2(1,0));
-    glVertex(  dst_corner+dst_size*make_float2(1,0));
+    glTexCoord(src_corner+src_size*make__float2(1,0));
+    glVertex(  dst_corner+dst_size*make__float2(1,0));
 
-    glTexCoord(src_corner+src_size*make_float2(1,1));
-    glVertex(  dst_corner+dst_size*make_float2(1,1));
+    glTexCoord(src_corner+src_size*make__float2(1,1));
+    glVertex(  dst_corner+dst_size*make__float2(1,1));
 
     glEnd();
     glDisable(GL_TEXTURE_2D);
@@ -306,12 +316,19 @@ int x_draw_printf(  Display *display,Window window,GC gc,int x,int y,
     return ret;
 }
 
+__global__ 
 void yuv_to_rgb(const void *yuv_data,void *rgb_data,int width,int height,unsigned int fmt){
-    struct{uint8_t a[4];}     *yuv_array=yuv_data,yuv_ent;
-    struct{uint8_t r,g,b,a;}  *rgb_array=rgb_data;
+    int idx=blockIdx.x*blockDim.x+threadIdx.x;
+    if(idx>=2*width*height) return; 
+
+    struct{uint8_t a[4];}     *yuv_array=(decltype(yuv_array))yuv_data,yuv_ent;
+    struct{uint8_t r,g,b,a;}  *rgb_array=(decltype(rgb_array))rgb_data;
     const int wh=width*height;
     char *fmtc=(char*)&fmt;
     int ui,vi,y0i,y1i;
+
+    // memcpy(rgb_data,yuv_data,width*height*2);
+    // return;
 
     assert(fmt=='YUYV' || fmt=='YVYU' || fmt=='UYVY' || fmt=='VYUY');
     
@@ -326,7 +343,9 @@ void yuv_to_rgb(const void *yuv_data,void *rgb_data,int width,int height,unsigne
         }
     }
     
-    for(int idx=0;idx<wh;idx++){
+
+    // for(int idx=0;idx<wh;idx++)
+    {
         yuv_ent=yuv_array[idx>>1];
         int u=yuv_ent.a[ui];
         int v=yuv_ent.a[vi];
@@ -340,22 +359,24 @@ void yuv_to_rgb(const void *yuv_data,void *rgb_data,int width,int height,unsigne
         g=(g<0)?0:(g>255)?255:g;
         b=(b<0)?0:(b>255)?255:b;
 
+        // return;
         rgb_array[idx].b=b;
         rgb_array[idx].g=g;
         rgb_array[idx].r=r;
     }
 }
 
-#define NUM_BUFS 1
+#define NUM_BUFS 10
 
 typedef struct{
     char dev_name[16];
     int fd;
     int w;
     int h;
-    void *buf_ptr;
+    void *buf_ptrs[NUM_BUFS];
     int buf_size;
     void *draw_buf;
+    void *yuv_buf;
     uint32_t tex_id;
     bool valid;
 
@@ -365,23 +386,31 @@ typedef struct{
 }cam_data_t;
 
 
-cam_data_t deinit_cam(cam_data_t *cd){
-    SYSCALL(close(cd->fd));
-    free(cd->draw_buf);
-    cd->draw_buf=NULL;
-    SYSCALL(munmap(cd->buf_ptr,cd->buf_size));
+void deinit_cam(cam_data_t *cd){
+    puts("start\n");
+    if(cd->valid){
+        for(int i=0;i<NUM_BUFS;i++) SYSCALL(munmap(cd->buf_ptrs[i],cd->buf_size));
+        PRINT(cd->fd,"%d");
+        SYSCALL(close(cd->fd));
+        // free(cd->draw_buf);
+        cudaFree(cd->draw_buf);
+        cudaFree(cd->yuv_buf);
+        cd->draw_buf=NULL;
+        cd->yuv_buf=NULL;
+    }
     memset(cd,0,sizeof(cam_data_t));
     cd->fd=-1;
+    puts("end");
 }
 
 void draw_cam_info(Display *display,Window info_window,GC gc,cam_data_t *cd){
     XClearWindow(display,info_window);
     XDrawString(display,info_window,gc,5 ,20,"selected device:");
-    XDrawString(display,info_window,gc,15,40,cd->dev_name);
-    XDrawString(display,info_window,gc,15,60,cd->cap.card);
-    XDrawString(display,info_window,gc,15,80,cd->cap.driver);
-    XDrawString(display,info_window,gc,15,100,cd->cap.bus_info);
-    XDrawString(display,info_window,gc,15,120,cd->fmtdesc.description);
+    XDrawString(display,info_window,gc,15,40 ,cd->dev_name);
+    XDrawString(display,info_window,gc,15,60 ,(const char*)cd->cap.card);
+    XDrawString(display,info_window,gc,15,80 ,(const char*)cd->cap.driver);
+    XDrawString(display,info_window,gc,15,100,(const char*)cd->cap.bus_info);
+    XDrawString(display,info_window,gc,15,120,(const char*)cd->fmtdesc.description);
     x_draw_printf(display,info_window,gc,15,140,"%dx%d",cd->w,cd->h);
 }
 
@@ -528,10 +557,12 @@ cam_data_t init_cam(const char *dev_name){
     struct v4l2_format fmt={0};
     fmt.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-    fmt.fmt.pix.width=1280;
-    fmt.fmt.pix.height=720;
-    // fmt.fmt.pix.width=640;
-    // fmt.fmt.pix.height=480;
+    // fmt.fmt.pix.width=1920;
+    // fmt.fmt.pix.height=1080;
+    // fmt.fmt.pix.width=1280;
+    // fmt.fmt.pix.height=720;
+    fmt.fmt.pix.width=640;
+    fmt.fmt.pix.height=480;
     fmt.fmt.pix.pixelformat=pixel_format;
     fmt.fmt.pix.field=V4L2_FIELD_NONE;
 
@@ -558,7 +589,7 @@ cam_data_t init_cam(const char *dev_name){
     reqbuf.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     reqbuf.memory=V4L2_MEMORY_MMAP;
     // reqbuf.memory=V4L2_MEMORY_USERPTR;
-    reqbuf.count=1;
+    reqbuf.count=NUM_BUFS;
     SYSCALL(ioctl(fd,VIDIOC_REQBUFS,&reqbuf));
     assert(reqbuf.count==NUM_BUFS);
 
@@ -576,8 +607,8 @@ cam_data_t init_cam(const char *dev_name){
         buffer.index=i;
         SYSCALL(ioctl(fd,VIDIOC_QUERYBUF,&buffer));
 
-        cd.buf_ptr=SYSCALL(mmap(NULL,buffer.length,PROT_READ|PROT_WRITE,MAP_SHARED,fd,buffer.m.offset));
-        assert(cd.buf_ptr);
+        cd.buf_ptrs[i]=SYSCALL(mmap(NULL,buffer.length,PROT_READ|PROT_WRITE,MAP_SHARED,fd,buffer.m.offset));
+        assert(cd.buf_ptrs[i]);
         cd.buf_size=buffer.length;
 
         bytes_per_pixel=buffer.length/fmt.fmt.pix.width/fmt.fmt.pix.height;
@@ -598,8 +629,11 @@ cam_data_t init_cam(const char *dev_name){
         SYSCALL(ioctl(fd,VIDIOC_QBUF,&buffer));
     }
     
-    cd.draw_buf=malloc(4*fmt.fmt.pix.width*fmt.fmt.pix.height);
+    // cd.draw_buf=malloc(4*fmt.fmt.pix.width*fmt.fmt.pix.height);
+    cudaMallocManaged(&cd.draw_buf,4*fmt.fmt.pix.width*fmt.fmt.pix.height);
     assert(cd.draw_buf);
+    cudaMallocManaged(&cd.yuv_buf,2*fmt.fmt.pix.width*fmt.fmt.pix.height);
+    assert(cd.yuv_buf);
 
     glGenTextures(1, &cd.tex_id);
     assert(cd.tex_id>0);
@@ -618,7 +652,8 @@ int main(){
     int devs_count=0;
     int devs_select=0;
 
-    #define MAX_DEVS (sizeof(devs_info)/sizeof(devs_info[0]))
+    #define MAX_DEVS 10
+    // (sizeof(devs_info)/sizeof(devs_info[0]))
 
     DIR *dev_dir=opendir("/dev");
     assert(dev_dir);
@@ -747,7 +782,7 @@ int main(){
     cam_data_t cd=init_cam(devs_info[devs_select].name);
 
     zoomer_t zoomer;
-    zoomer_init(&zoomer,make_float2(1,1),make_float2(1,1));
+    zoomer_init(&zoomer,make__float2(1,1),make__float2(1,1));
 
 
     bool is_streaming=false;
@@ -764,12 +799,12 @@ int main(){
         Window root;
         unsigned int mask;
         XQueryPointer(display,gl_window,&root,&child,&root_x,&root_y,&win_x,&win_y,&mask);
-        float2 mouse;
+        _float2 mouse;
         mouse[0]=map(win_x,0,win_w,-1/aspect,1/aspect);
         mouse[1]=map(win_y,0,win_h,1,-1);
         
         const float margin=(1-1/aspect)/2;
-        float2 center;
+        _float2 center;
         center[0]=map(win_x,0,win_w,margin,1-margin);
         center[1]=map(win_y,0,win_h,0,1);
 
@@ -890,14 +925,24 @@ int main(){
             }
 
             idx=buffer.index;
-            assert(idx==0);
+            // assert(idx==0);
             memset(&buffer,0,sizeof buffer);
             buffer.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
             buffer.memory=V4L2_MEMORY_MMAP;
             buffer.index=idx;
 
             SYSCALL(ioctl(cd.fd,VIDIOC_QBUF,&buffer));
-            yuv_to_rgb(cd.buf_ptr,cd.draw_buf,cd.w,cd.h,cd.fmt.fmt.pix.pixelformat);
+            double t0=itime();
+
+            memcpy(cd.yuv_buf,cd.buf_ptrs[idx],cd.w*cd.h*2);
+            int block_size=256;
+            int num_blocks=(cd.w*cd.h+block_size-1)/block_size;
+            yuv_to_rgb<<<num_blocks,block_size>>>(
+                cd.yuv_buf,cd.draw_buf,cd.w,cd.h,cd.fmt.fmt.pix.pixelformat);
+            CUDA(cudaDeviceSynchronize());
+            double t1=itime();
+            // PRINT(t1-t0,"%f");
+            // PRINT(1/(t1-t0),"%f");
         }
 
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
