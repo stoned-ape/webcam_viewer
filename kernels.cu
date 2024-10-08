@@ -8,7 +8,7 @@ __global__ void bayer_to_rgb(
     int idx=blockIdx.x*blockDim.x+threadIdx.x;
     if(idx>=2*w*h) return; 
 
-    struct rgb_t{uint8_t r,g,b,a;}; 
+    struct rgb_t{uint16_t r,g,b,a;}; 
 
     rgb_t *rgb_array=(typeof(rgb_array))rgb_data;
    
@@ -17,7 +17,7 @@ __global__ void bayer_to_rgb(
     int i=idx/w;
     int j=idx%w;
 
-    uint16_t v=x[idx]>>8; //works
+    uint16_t v=x[idx]; //works
     
 
     rgb_t pixel;
@@ -28,22 +28,23 @@ __global__ void bayer_to_rgb(
     //1 G R
 
     if      (i%2==0 && j%2==1){//green
-        pixel.r=x[(i+1)*w+(j+0)]>>8;
+        pixel.r=x[(i+1)*w+(j+0)];
         pixel.g=v;
-        pixel.b=x[(i+0)*w+(j-1)]>>8;
+        pixel.b=x[(i+0)*w+(j-1)];
     }else if(i%2==1 && j%2==1){ //red
         pixel.r=v;
-        pixel.g=((x[(i-1)*w+(j-0)]>>8)+(x[(i-0)*w+(j-1)]>>8))/2;
-        pixel.b=  x[(i-1)*w+(j-1)]>>8;
+        pixel.g=((x[(i-1)*w+(j-0)])+(x[(i-0)*w+(j-1)]))/2;
+        pixel.b=  x[(i-1)*w+(j-1)];
     }else if(i%2==0 && j%2==0){ //blue
-        pixel.r=  x[(i+1)*w+(j+1)]>>8;
-        pixel.g=((x[(i+1)*w+(j+0)]>>8)+(x[(i+0)*w+(j+1)]>>8))/2;
+        pixel.r=  x[(i+1)*w+(j+1)];
+        pixel.g=((x[(i+1)*w+(j+0)])+(x[(i+0)*w+(j+1)]))/2;
         pixel.b=v;
     }else if(i%2==1 && j%2==0){ //green
-        pixel.r=x[(i+0)*w+(j+1)]>>8;
+        pixel.r=x[(i+0)*w+(j+1)];
         pixel.g=v;
-        pixel.b=x[(i-1)*w+(j+0)]>>8;
+        pixel.b=x[(i-1)*w+(j+0)];
     }
+    
     rgb_array[idx]=pixel;
 }
 
@@ -57,7 +58,7 @@ __global__ void yuv_to_rgb(
     if(idx>=2*width*height) return; 
 
     struct{uint8_t a[4];}     *yuv_array=(decltype(yuv_array))yuv_data,yuv_ent;
-    struct{uint8_t r,g,b,a;}  *rgb_array=(decltype(rgb_array))rgb_data;
+    struct{uint16_t r,g,b,a;}  *rgb_array=(decltype(rgb_array))rgb_data;
     const int wh=width*height;
     char *fmtc=(char*)&fmt;
     int ui,vi,y0i,y1i;
@@ -95,8 +96,8 @@ __global__ void yuv_to_rgb(
         b=(b<0)?0:(b>255)?255:b;
 
         // return;
-        rgb_array[idx].b=b;
-        rgb_array[idx].g=g;
-        rgb_array[idx].r=r;
+        rgb_array[idx].b=b<<8;
+        rgb_array[idx].g=g<<8;
+        rgb_array[idx].r=r<<8;
     }
 }

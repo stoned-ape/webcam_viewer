@@ -28,6 +28,8 @@ _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"");
 // /usr/include/linux/videodev2.h
 // /usr/include/linux/v4l2-controls.h
 #include <linux/videodev2.h>
+#include <gpiod.h>
+
 
 
 #define SYSCALL_NOEXIT(call)({ \

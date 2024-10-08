@@ -1,5 +1,11 @@
 # Webcam Live Viewer
 
+## Dependencies
+```bash
+sudo apt install gpiod
+sudo apt install libgpiod-dev
+```
+
 ## Features
 
 * Live veiw cameras that support the video4linux2 API 

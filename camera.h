@@ -25,3 +25,10 @@ typedef struct{
 void deinit_cam(cam_data_t *cd);
 void draw_cam_info(Display *display,Window info_window,GC gc,cam_data_t *cd);
 cam_data_t init_cam(const char *dev_name,bool use_yuv);
+
+void enqueue_buf(int fd,int idx);
+int dequeue_buf(int fd);
+
+
+void enqueue_all(int fd);
+void dequeue_all(int fd);

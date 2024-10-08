@@ -2,6 +2,7 @@
 #include "kernels.h"
 #include "zoomer.h"
 #include "camera.h"
+#include "cv_debayer.h"
 
 void make_bmp(const char *file_name,int width,int height,void *pixels){
     typedef struct __attribute__((packed)){
@@ -54,11 +55,20 @@ void make_bmp(const char *file_name,int width,int height,void *pixels){
 
 
 int start_stream(int fd){
+    
     enum v4l2_buf_type type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     return SYSCALL(ioctl(fd,VIDIOC_STREAMON,&type));
 }
 
+int set_trigger_mode(int fd,int mode){
+    struct v4l2_control control;
+    control.id=0x009a092d;
+    control.value=mode;// 0,1,2
+    return SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
+}
+
 int stop_stream(int fd){
+    // set_trigger_mode(fd,0);
     enum v4l2_buf_type type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     return SYSCALL(ioctl(fd,VIDIOC_STREAMOFF,&type));
 }
@@ -66,11 +76,29 @@ int stop_stream(int fd){
 
 
 
+
 int main(){
+
+    bool trigger_mode=false;
+    //108
+    //32
+    const unsigned int gpio_pin=108;
+    struct gpiod_chip *chip=NULL;
+    struct gpiod_line *line=NULL;
+
+
+    chip=gpiod_chip_open_by_name("gpiochip0");
+    assert(chip);
+    line=gpiod_chip_get_line(chip, gpio_pin);
+    assert(line);
+    gpiod_line_set_value(line,0);
+    gpiod_line_request_output(line, "example", 0);
+
+   
 
     static struct{char name[16];char card[32];} devs_info[10]={0};
     int devs_count=0;
-    int devs_select=2;
+    int devs_select=1;
     bool use_yuv=true;
 
     #define MAX_DEVS 10
@@ -275,15 +303,15 @@ int main(){
                 printf("stream button clicked\n");
 
                 if(is_streaming){ 
-                    SYSCALL(ioctl(cd.fd,VIDIOC_DQBUF,&buffer));
                     stop_stream(cd.fd);
+                    dequeue_all(cd.fd);
                     is_streaming=false;
 
                     XClearWindow(display,stream_button);
                     XDrawString(display,stream_button,gc,10,20,"start stream");
 
                 }else if(cd.valid){ 
-                    SYSCALL(ioctl(cd.fd,VIDIOC_QBUF,&buffer));
+                    enqueue_all(cd.fd);
                     start_stream(cd.fd);
                     is_streaming=true;
 
@@ -295,7 +323,11 @@ int main(){
             }else if(e.xbutton.window==save_button && cd.valid){
                 printf("saving image\n");
 
-                make_bmp("img.bmp",cd.w,cd.h,cd.draw_buf);
+                if(use_yuv){
+                    make_bmp("img.bmp",cd.w,cd.h,cd.draw_buf);
+                }else{
+                    cv_save("img.tiff",cd.w,cd.h,cd.draw_buf);
+                }
 
             }else if(e.xbutton.window==bayer_button && cd.valid){
                 XClearWindow(display,bayer_button);
@@ -307,8 +339,8 @@ int main(){
                     use_yuv=true;
                 }
                 if(is_streaming){ 
-                    SYSCALL(ioctl(cd.fd,VIDIOC_DQBUF,&buffer));
                     stop_stream(cd.fd);
+                    dequeue_all(cd.fd);
                     is_streaming=false;
 
                     XClearWindow(display,stream_button);
@@ -330,8 +362,8 @@ int main(){
             for(int i=0;i<devs_count;i++) if(e.xbutton.window==dev_buttons[i]){
                 printf("device %d button clicked\n",i);
                 if(is_streaming){ 
-                    SYSCALL(ioctl(cd.fd,VIDIOC_DQBUF,&buffer));
                     stop_stream(cd.fd);
+                    dequeue_all(cd.fd);
                     is_streaming=false;
 
                     XClearWindow(display,stream_button);
@@ -378,28 +410,21 @@ int main(){
             }
         }
 
-        int idx=0;
+        // int idx=0;
         if(is_streaming){
+
             
-            struct v4l2_buffer buffer={0};
-            buffer.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buffer.memory=V4L2_MEMORY_MMAP;
-            if(-1==ioctl(cd.fd,VIDIOC_DQBUF,&buffer)){
-                puts("loop");
-                if(errno!=EAGAIN){
-                    PRINT(errno,"%d");
-                    goto app_done;
-                }
+            if(trigger_mode){
+                usleep(1e4); 
+                gpiod_line_set_value(line,1);
+                usleep(1e3); 
+                gpiod_line_set_value(line,0);
             }
 
-            idx=buffer.index;
-            // assert(idx==0);
-            memset(&buffer,0,sizeof buffer);
-            buffer.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buffer.memory=V4L2_MEMORY_MMAP;
-            buffer.index=idx;
+            int idx=dequeue_buf(cd.fd);
+            enqueue_buf(cd.fd,idx);
 
-            SYSCALL(ioctl(cd.fd,VIDIOC_QBUF,&buffer));
+
             double t0=itime();
 
             memcpy(cd.yuv_buf,cd.buf_ptrs[idx],cd.w*cd.h*2);
@@ -409,8 +434,9 @@ int main(){
                 yuv_to_rgb<<<num_blocks,block_size>>>(
                     cd.yuv_buf,cd.draw_buf,cd.w,cd.h,cd.fmt.fmt.pix.pixelformat);
             }else{
-                bayer_to_rgb<<<num_blocks,block_size>>>(
-                    cd.yuv_buf,cd.draw_buf,cd.w,cd.h);
+                cv_bayer_to_rgb(cd.yuv_buf,cd.draw_buf,cd.w,cd.h);
+                // bayer_to_rgb<<<num_blocks,block_size>>>(
+                    // cd.yuv_buf,cd.draw_buf,cd.w,cd.h);
             }
             CUDA(cudaDeviceSynchronize());
             double t1=itime();
@@ -428,7 +454,8 @@ int main(){
             cd.w,
             cd.h,
             GL_RGBA,
-            GL_UNSIGNED_BYTE,
+            GL_UNSIGNED_SHORT,
+            // GL_UNSIGNED_BYTE,
             cd.draw_buf
         );
 
@@ -455,11 +482,20 @@ int main(){
 
     }
 app_done:
+    //enable trigger mode
+    if(trigger_mode){
+        set_trigger_mode(cd.fd,0);
+    }
+
     if(is_streaming) stop_stream(cd.fd);
     SYSCALL(close(cd.fd));
 
     XDestroyWindow(display,window);
     XCloseDisplay(display);
+
+    gpiod_line_release(line);
+    gpiod_chip_close(chip);
+
     puts("done");
 
 }
