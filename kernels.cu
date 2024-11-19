@@ -1,6 +1,23 @@
 #include "kernels.h"
 
 
+__global__ void unpack(const void *packed_data,void *unpacked_data,int n){
+
+    int idx=blockIdx.x*blockDim.x+threadIdx.x;
+    if(idx>=n) return;
+
+    struct __attribute__((packed)) packed_t{
+        uint16_t a:12,b:12;
+    }; 
+    static_assert(sizeof(packed_t)==3,"");
+
+    packed_t p=((const packed_t*)packed_data)[idx/2];
+
+    ((uint16_t*)unpacked_data)[idx]=(idx%2==0)?p.a<<4:p.b<<4;
+
+    return;
+}
+
 __global__ void bayer_to_rgb(
         const void *bayer_data,void *rgb_data,
         int w,int h){
@@ -21,7 +38,7 @@ __global__ void bayer_to_rgb(
     
 
     rgb_t pixel;
-    pixel.a=0;
+    pixel.a=0xffff;
 
     //  0 1 = j%2
     //0 B G
@@ -44,6 +61,10 @@ __global__ void bayer_to_rgb(
         pixel.g=v;
         pixel.b=x[(i-1)*w+(j+0)];
     }
+
+    // pixel.r=v;
+    // pixel.g=v;
+    // pixel.b=v;
     
     rgb_array[idx]=pixel;
 }

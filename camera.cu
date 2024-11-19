@@ -32,17 +32,87 @@ void dequeue_all(int fd){
     }
 }
 
+void set_exposure_ms(int fd,int ms){
+    struct v4l2_control control;
+    control.id=0x009a0902;
+    control.value=ms;
+    // control.value=50;
+    // if(0!=strcmp((char*)cap.driver,"uvcvideo")) control.value*=1000;
+    SYSCALL_NOEXIT(ioctl(fd,VIDIOC_S_CTRL,&control));
+}
+
+int get_cam_id(int fd){
+    // struct v4l2_ext_control control={0};
+    // control.id=0x9a093a;//V4L2_CID_UNIQUE_ID;
+    // control.value=69;
+    // // SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
+    // control.value=0;
+
+    // char value[64];
+    // control.size=sizeof(value);
+    // control.string=value;
+    struct v4l2_query_ext_ctrl arg={0};
+    arg.id=0x9a093a;
+    SYSCALL(ioctl(fd,VIDIOC_QUERY_EXT_CTRL,&arg));
+    PRINT(arg.maximum,"%d");
+
+    struct v4l2_ext_control ctrl={0};
+    struct v4l2_ext_controls ctrls={0};
+
+    // Allocate buffer for the string value
+    char value[256*2]="bruh";  // Set this to an appropriate size for the control
+    memset(value, 0, sizeof(value));
+
+    // Set up control parameters
+    ctrl.id = 0x9a093a;
+    ctrl.size = sizeof(value);  // Size of the buffer
+    ctrl.string = value;        // Pointer to buffer
+
+    ctrls.ctrl_class=0;
+    ctrls.count=0;
+    SYSCALL(ioctl(fd,VIDIOC_TRY_EXT_CTRLS,&ctrls));
+
+    PRINT(ctrls.ctrl_class,"%d");
+
+    int classes[]={
+        V4L2_CTRL_CLASS_USER,
+        V4L2_CTRL_CLASS_MPEG,
+        V4L2_CTRL_CLASS_CAMERA,
+        V4L2_CTRL_CLASS_FM_TX,
+        V4L2_CTRL_CLASS_FLASH,
+        V4L2_CTRL_CLASS_JPEG,
+        V4L2_CTRL_CLASS_IMAGE_SOURCE,
+        V4L2_CTRL_CLASS_IMAGE_PROC,
+        V4L2_CTRL_CLASS_DV,
+        V4L2_CTRL_CLASS_FM_RX,
+        V4L2_CTRL_CLASS_RF_TUNER,
+        V4L2_CTRL_CLASS_DETECT,
+        0,
+    };
+
+    bool succ=0;
+    for(int i=0;i<sizeof(classes)/sizeof(classes[0]);i++){
+        ctrls.ctrl_class=classes[i];
+        ctrls.count=1;
+        ctrls.controls=&ctrl;
+
+        succ=0<=SYSCALL_NOEXIT(ioctl(fd,VIDIOC_G_EXT_CTRLS,&ctrls));
+    }
+    assert(succ);
+    puts(ctrl.string);
+    return ctrl.value;
+}
+
 void deinit_cam(cam_data_t *cd){
     puts("start\n");
     if(cd->valid){
         for(int i=0;i<NUM_BUFS;i++) SYSCALL(munmap(cd->buf_ptrs[i],cd->buf_size));
         PRINT(cd->fd,"%d");
         SYSCALL(close(cd->fd));
-        // free(cd->draw_buf);
         cudaFree(cd->draw_buf);
-        cudaFree(cd->yuv_buf);
-        cd->draw_buf=NULL;
-        cd->yuv_buf=NULL;
+        cudaFree(cd->raw_buf);
+        if(cd->unpack_buf) cudaFree(cd->unpack_buf);
+        
     }
     memset(cd,0,sizeof(cam_data_t));
     cd->fd=-1;
@@ -58,6 +128,7 @@ void draw_cam_info(Display *display,Window info_window,GC gc,cam_data_t *cd){
     XDrawString(display,info_window,gc,15,100,(const char*)cd->cap.bus_info);
     XDrawString(display,info_window,gc,15,120,(const char*)cd->fmtdesc.description);
     x_draw_printf(display,info_window,gc,15,140,"%dx%d",cd->w,cd->h);
+    x_draw_printf(display,info_window,gc,15,160,"unique id: %d",cd->id);
 }
 
 cam_data_t init_cam(const char *dev_name,bool use_yuv){
@@ -77,6 +148,9 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
     PRINT(cap.capabilities,"%x");
     cd.cap=cap;
 
+    cd.ref_cam=false;
+    if(0==strcmp((char*)cap.driver,"uvcvideo")) cd.ref_cam=true;
+
     // #define num_ranges (8)
     const int ranges[][2]={
         // {V4L2_CID_USER_BASE,43},
@@ -88,7 +162,7 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
         // {V4L2_CID_RF_TUNER_CLASS_BASE,91},
         // {V4L2_CID_DETECT_CLASS_BASE,4},
         // {0,INT_MAX},
-        {0x9a0000,0x10000},
+        {0x980000,0x100000},
     };
     const int num_ranges=sizeof(ranges)/sizeof(ranges[0]);
 
@@ -154,15 +228,15 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
     control.value=50;
     // control.value=50;
     if(0!=strcmp((char*)cap.driver,"uvcvideo")) control.value*=1000;
-    SYSCALL_NOEXIT(ioctl(fd,VIDIOC_S_CTRL,&control));
+    // SYSCALL_NOEXIT(ioctl(fd,VIDIOC_S_CTRL,&control));
 
-    //enable trigger mode
-    if(0!=strcmp((char*)cap.driver,"uvcvideo")){
-        control.id=0x009a092d;
-        control.value=2;
-        // SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
+    if(cd.ref_cam){
+        cd.id=0;
+    }else{
+        //cd.id=get_cam_id(cd.fd);
     }
 
+    
 
     struct v4l2_fmtdesc fmtdesc={0};
     fmtdesc.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -179,7 +253,7 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
                 cd.fmtdesc=fmtdesc;
             }
         }else{
-            if(pf=='21GB'){
+            if(pf=='21GB' || pf=='21Y'){
                 pixel_format=pf;
                 cd.fmtdesc=fmtdesc;
             }
@@ -264,7 +338,7 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
     PRINT(reqbuf.capabilities,"%d");
 
     int bytes_per_pixel=4;
-
+    cd.raw_buf_size=0;
     for(int i=0;i<reqbuf.count;i++){
         struct v4l2_buffer buffer={0};
         buffer.type=reqbuf.type;
@@ -278,6 +352,8 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
 
         bytes_per_pixel=buffer.length/fmt.fmt.pix.width/fmt.fmt.pix.height;
 
+        cd.raw_buf_size=buffer.length,"%u";
+
         PRINT(buffer.length,"%u");
         PRINT(buffer.bytesused,"%u");
         PRINT(buffer.m.offset,"%u");
@@ -286,21 +362,19 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
 
     PRINT(bytes_per_pixel,"%d");
 
-    // for(int i=0;i<reqbuf.count;i++){
-    //     struct v4l2_buffer buffer={0};
-    //     buffer.type=reqbuf.type;
-    //     buffer.memory=V4L2_MEMORY_MMAP;
-    //     buffer.index=i;
-    //     SYSCALL(ioctl(fd,VIDIOC_QBUF,&buffer));
-    // }
-    
     enqueue_all(cd.fd);
 
     // cd.draw_buf=malloc(4*fmt.fmt.pix.width*fmt.fmt.pix.height);
     cudaMallocManaged(&cd.draw_buf,2*4*fmt.fmt.pix.width*fmt.fmt.pix.height);
     assert(cd.draw_buf);
-    cudaMallocManaged(&cd.yuv_buf,2*2*fmt.fmt.pix.width*fmt.fmt.pix.height);
-    assert(cd.yuv_buf);
+    // cudaMallocManaged(&cd.raw_buf,2*2*fmt.fmt.pix.width*fmt.fmt.pix.height);
+    cudaMallocManaged(&cd.raw_buf,cd.raw_buf_size);//2*2*fmt.fmt.pix.width*fmt.fmt.pix.height);
+    assert(cd.raw_buf);
+
+    if(cd.ref_cam  && !use_yuv){
+        cudaMallocManaged(&cd.unpack_buf,2*fmt.fmt.pix.width*fmt.fmt.pix.height);
+        assert(cd.unpack_buf);
+    }
 
     glGenTextures(1, &cd.tex_id);
     assert(cd.tex_id>0);

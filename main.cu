@@ -4,6 +4,8 @@
 #include "camera.h"
 #include "cv_debayer.h"
 
+#include <vector_types.h>
+
 void make_bmp(const char *file_name,int width,int height,void *pixels){
     typedef struct __attribute__((packed)){
         uint16_t magic; //0x4d42
@@ -60,10 +62,19 @@ int start_stream(int fd){
     return SYSCALL(ioctl(fd,VIDIOC_STREAMON,&type));
 }
 
-int set_trigger_mode(int fd,int mode){
+int set_trigger_mode(int fd,bool mode,bool ref_cam){
     struct v4l2_control control;
-    control.id=0x009a092d;
-    control.value=mode;// 0,1,2
+    if(ref_cam){ 
+        //backlight_compensation
+        control.value=2*mode+1;// 1,2,3
+        control.id=0x0098091c;
+    }else{ 
+        // 0: Master Mode
+        // 1: Trigger Exposure
+        // 2: Trigger Aquisition
+        control.value=mode*2;
+        control.id=0x009a092d;
+    }
     return SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
 }
 
@@ -71,6 +82,21 @@ int stop_stream(int fd){
     // set_trigger_mode(fd,0);
     enum v4l2_buf_type type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     return SYSCALL(ioctl(fd,VIDIOC_STREAMOFF,&type));
+}
+
+struct irect{
+    int2 pos;
+    uint2 size;
+};
+
+irect get_win_rect(Display *display,Window window){
+    unsigned int width, height;
+    Window root_return;
+    int x_return, y_return;
+    unsigned int border_width_return, depth_return;
+    XGetGeometry(display, window, &root_return, &x_return, &y_return,
+                 &width, &height, &border_width_return, &depth_return);
+    return irect{int2{x_return,y_return},uint2{width,height}};
 }
 
 
@@ -82,24 +108,28 @@ int main(){
     bool trigger_mode=false;
     //108
     //32
-    const unsigned int gpio_pin=108;
+    // const unsigned int gpio_pin=108;
+    const unsigned int gpio_pin=112;
     struct gpiod_chip *chip=NULL;
-    struct gpiod_line *line=NULL;
+    struct gpiod_line *lines[2]={NULL,NULL};
 
 
     chip=gpiod_chip_open_by_name("gpiochip0");
     assert(chip);
-    line=gpiod_chip_get_line(chip, gpio_pin);
-    assert(line);
-    gpiod_line_set_value(line,0);
-    gpiod_line_request_output(line, "example", 0);
+    lines[0]=gpiod_chip_get_line(chip, 108); //msi cam
+    lines[1]=gpiod_chip_get_line(chip, 112); //ref cam
+    for(int i=0;i<2;i++){
+        assert(lines[i]);
+        gpiod_line_set_value(lines[i],1);
+        gpiod_line_request_output(lines[i], "example", 0);
+    }
 
    
 
     static struct{char name[16];char card[32];} devs_info[10]={0};
     int devs_count=0;
-    int devs_select=1;
-    bool use_yuv=true;
+    int devs_select=3;
+    bool use_yuv=false;
 
     #define MAX_DEVS 10
     // (sizeof(devs_info)/sizeof(devs_info[0]))
@@ -162,11 +192,20 @@ int main(){
     int button_space=10;
     int button_off=10;
     
-    
-    Window stream_button=XCreateSimpleWindow(
+    Window button_win=XCreateSimpleWindow(
         display,
         window,
         10,button_off,
+        side_bar_w-20,5*(button_h+button_space),
+        1,
+        0x0,0x00ffffff
+    );
+    XMapWindow(display,button_win);
+    
+    Window stream_button=XCreateSimpleWindow(
+        display,
+        button_win,
+        0,0,
         side_bar_w-20,button_h,
         1,
         0x0,0x00aaaaaa
@@ -176,8 +215,8 @@ int main(){
 
     Window save_button=XCreateSimpleWindow(
         display,
-        window,
-        10,button_off+1*(button_h+button_space),
+        button_win,
+        0,1*(button_h+button_space),
         side_bar_w-20,button_h,
         1,
         0x0,0x00aaaaaa
@@ -187,8 +226,8 @@ int main(){
 
     Window bayer_button=XCreateSimpleWindow(
         display,
-        window,
-        10,button_off+2*(button_h+button_space),
+        button_win,
+        0,2*(button_h+button_space),
         side_bar_w-20,button_h,
         1,
         0x0,0x00aaaaaa
@@ -196,13 +235,54 @@ int main(){
     XMapWindow(display,bayer_button);
     XSelectInput(display,bayer_button,ExposureMask|ButtonPressMask);
 
+    int exps[5]={10,20,50,100,200};
+    const int exps_cnt=sizeof(exps)/sizeof(exps[0]);
+    Window exp_wins[exps_cnt];
+    for(int i=0;i<exps_cnt;i++){
+        exp_wins[i]=XCreateSimpleWindow(
+            display,
+            button_win,
+            i*(side_bar_w-20)/exps_cnt,3*(button_h+button_space),
+            (side_bar_w-20)/exps_cnt,button_h,
+            1,
+            0x0,0x00aaaaaa
+        );
+        XMapWindow(display,exp_wins[i]);
+        XSelectInput(display,exp_wins[i],ExposureMask|ButtonPressMask);
+
+    }
+
+    Window trigger_button=XCreateSimpleWindow(
+        display,
+        button_win,
+        0,4*(button_h+button_space),
+        side_bar_w-20,button_h,
+        1,
+        0x0,0x00aaaaaa
+    );
+    XMapWindow(display,trigger_button);
+    XSelectInput(display,trigger_button,ExposureMask|ButtonPressMask);
+
+
+    irect br=get_win_rect(display,button_win);
+    Window cam_select_win=XCreateSimpleWindow(
+        display,
+        window,
+        10,br.pos.y+br.size.y,//10+button_off+(3)*(button_h+button_space),
+        side_bar_w-20,(button_h+button_space)*devs_count+20,
+        1,
+        0x0,0x00ffffff
+    );
+    XMapWindow(display,cam_select_win);
+
 
     Window dev_buttons[MAX_DEVS];
     for(int i=0;i<devs_count;i++){
         dev_buttons[i]=XCreateSimpleWindow(
             display,
-            window,
-            10,10+button_off+(3+i)*(button_h+button_space),
+            cam_select_win,
+            0,20+i*(button_h+button_space),
+            // 10,10+button_off+(3+i)*(button_h+button_space),
             side_bar_w-20,button_h,
             1,
             0x0,0x00aaaaaa
@@ -212,10 +292,12 @@ int main(){
         
     }
 
+    irect csr=get_win_rect(display,cam_select_win);
     Window info_window=XCreateSimpleWindow(
         display,
         window,
-        10,10+button_off+(3+devs_count)*(button_h+button_space),
+        10,csr.pos.y+csr.size.y,
+        // 10,10+button_off+(3+devs_count)*(button_h+button_space),
         side_bar_w-20,200,
         1,
         0x0,0x00eeeeee
@@ -252,6 +334,8 @@ int main(){
 
     bool is_streaming=false;
     if(cd.valid){
+        set_trigger_mode(cd.fd,trigger_mode,cd.ref_cam);
+
         start_stream(cd.fd);
         is_streaming=true;
     }
@@ -286,8 +370,24 @@ int main(){
 
             XDrawString(display,stream_button,gc,10,20,"stop stream");
             XDrawString(display,save_button,gc,10,20,"save image");
-            XDrawString(display,bayer_button,gc,10,20,"use BayerBG12");
-            XDrawString(display,window,gc,10,5+button_off+3*(button_h+button_space),"choose video device:");
+            if(use_yuv){
+                XDrawString(display,bayer_button,gc,10,20,"use BayerBG12");
+            }else{
+                XDrawString(display,bayer_button,gc,10,20,"use YUV");
+            }
+
+            if(trigger_mode){
+                XDrawString(display,trigger_button,gc,10,20,"disable trigger");
+            }else{
+                XDrawString(display,trigger_button,gc,10,20,"enable trigger");
+            }
+
+            for(int i=0;i<exps_cnt;i++){
+                x_draw_printf(display,exp_wins[i],gc,3,20,"%d",exps[i]);
+            }
+
+            // XDrawString(display,cam_select_win,gc,10,0*(5+button_off+3*(button_h+button_space)),"choose video device:");
+            XDrawString(display,cam_select_win,gc,5,15,"choose video device:");
 
             for(int i=0;i<devs_count;i++){
                 XDrawString(display,dev_buttons[i],gc,10,15,devs_info[i].name);
@@ -357,8 +457,27 @@ int main(){
                         draw_cam_info(display,info_window,gc,&cd);
                     }
                 }
+            }else if(e.xbutton.window==trigger_button && cd.valid){
+                XClearWindow(display,trigger_button);
+                if(trigger_mode){
+                    XDrawString(display,trigger_button,gc,10,20,"enable trigger");
+                    trigger_mode=false;
+                    set_trigger_mode(cd.fd,trigger_mode,cd.ref_cam);
+                }else{
+                    XDrawString(display,trigger_button,gc,10,20,"disable trigger");
+                    trigger_mode=true;
+                    set_trigger_mode(cd.fd,trigger_mode,cd.ref_cam);
+                }
+                 
             }
+            for(int i=0;i<exps_cnt;i++) if(e.xbutton.window==exp_wins[i]){
 
+                if(0==strcmp((char*)cd.cap.driver,"uvcvideo")){
+                    set_exposure_ms(cd.fd,exps[i]);
+                }else{
+                    set_exposure_ms(cd.fd,exps[i]*1000);
+                }
+            }
             for(int i=0;i<devs_count;i++) if(e.xbutton.window==dev_buttons[i]){
                 printf("device %d button clicked\n",i);
                 if(is_streaming){ 
@@ -416,9 +535,11 @@ int main(){
             
             if(trigger_mode){
                 usleep(1e4); 
-                gpiod_line_set_value(line,1);
-                usleep(1e3); 
-                gpiod_line_set_value(line,0);
+                gpiod_line_set_value(lines[cd.ref_cam],1);
+                usleep(1e5); 
+                gpiod_line_set_value(lines[cd.ref_cam],0);
+                usleep(1e5);
+                gpiod_line_set_value(lines[cd.ref_cam],1);
             }
 
             int idx=dequeue_buf(cd.fd);
@@ -426,17 +547,21 @@ int main(){
 
 
             double t0=itime();
-
-            memcpy(cd.yuv_buf,cd.buf_ptrs[idx],cd.w*cd.h*2);
+            assert(cd.raw_buf);
+            memcpy(cd.raw_buf,cd.buf_ptrs[idx],cd.raw_buf_size);
             int block_size=256;
             int num_blocks=(cd.w*cd.h+block_size-1)/block_size;
             if(use_yuv){
                 yuv_to_rgb<<<num_blocks,block_size>>>(
-                    cd.yuv_buf,cd.draw_buf,cd.w,cd.h,cd.fmt.fmt.pix.pixelformat);
+                    cd.raw_buf,cd.draw_buf,cd.w,cd.h,cd.fmt.fmt.pix.pixelformat);
             }else{
-                cv_bayer_to_rgb(cd.yuv_buf,cd.draw_buf,cd.w,cd.h);
-                // bayer_to_rgb<<<num_blocks,block_size>>>(
-                    // cd.yuv_buf,cd.draw_buf,cd.w,cd.h);
+                void *input=cd.raw_buf;
+                if(cd.ref_cam){
+                    unpack<<<num_blocks,block_size>>>(cd.raw_buf,cd.unpack_buf,cd.w*cd.h);
+                    input=cd.unpack_buf;
+                }
+                // cv_bayer_to_rgb(input,cd.draw_buf,cd.w,cd.h);
+                bayer_to_rgb<<<num_blocks,block_size>>>(input,cd.draw_buf,cd.w,cd.h);
             }
             CUDA(cudaDeviceSynchronize());
             double t1=itime();
@@ -484,7 +609,7 @@ int main(){
 app_done:
     //enable trigger mode
     if(trigger_mode){
-        set_trigger_mode(cd.fd,0);
+        set_trigger_mode(cd.fd,0,cd.ref_cam);
     }
 
     if(is_streaming) stop_stream(cd.fd);
@@ -493,7 +618,8 @@ app_done:
     XDestroyWindow(display,window);
     XCloseDisplay(display);
 
-    gpiod_line_release(line);
+    gpiod_line_release(lines[0]);
+    gpiod_line_release(lines[1]);
     gpiod_chip_close(chip);
 
     puts("done");
