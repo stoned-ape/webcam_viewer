@@ -1,7 +1,7 @@
 #pragma once
 #include "common.h"
 
-typedef __attribute__((vector_size(8))) float _float2;
+// typedef __attribute__((vector_size(8))) float _float2;
 
 static _float2 make__float2(float x,float y){
     _float2 f={x,y};

@@ -1,5 +1,15 @@
 #include "camera.h"
 
+int start_stream(int fd){   
+    enum v4l2_buf_type type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    return SYSCALL(ioctl(fd,VIDIOC_STREAMON,&type));
+}
+
+int stop_stream(int fd){
+    enum v4l2_buf_type type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    return SYSCALL(ioctl(fd,VIDIOC_STREAMOFF,&type));
+}
+
 
 void enqueue_buf(int fd,int idx){
     struct v4l2_buffer buffer={0};
@@ -39,6 +49,22 @@ void set_exposure_ms(int fd,int ms){
     // control.value=50;
     // if(0!=strcmp((char*)cap.driver,"uvcvideo")) control.value*=1000;
     SYSCALL_NOEXIT(ioctl(fd,VIDIOC_S_CTRL,&control));
+}
+
+int set_trigger_mode(int fd,bool mode,bool ref_cam){
+    struct v4l2_control control;
+    if(ref_cam){ 
+        //backlight_compensation
+        control.value=2*mode+1;// 1,2,3
+        control.id=0x0098091c;
+    }else{ 
+        // 0: Master Mode
+        // 1: Trigger Exposure
+        // 2: Trigger Aquisition
+        control.value=mode*2;
+        control.id=0x009a092d;
+    }
+    return SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
 }
 
 int get_cam_id(int fd){
@@ -131,7 +157,7 @@ void draw_cam_info(Display *display,Window info_window,GC gc,cam_data_t *cd){
     x_draw_printf(display,info_window,gc,15,160,"unique id: %d",cd->id);
 }
 
-cam_data_t init_cam(const char *dev_name,bool use_yuv){
+cam_data_t init_cam(const char *dev_name,bool use_yuv,int w,int h){
     cam_data_t cd={0};
     cd.valid=1;
     strncpy(cd.dev_name,dev_name,sizeof cd.dev_name);
@@ -300,8 +326,8 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
     // fmt.fmt.pix.height=1080;
     // fmt.fmt.pix.width=1280;
     // fmt.fmt.pix.height=720;
-    fmt.fmt.pix.width=2432;
-    fmt.fmt.pix.height=2048;
+    fmt.fmt.pix.width=w;//2432;
+    fmt.fmt.pix.height=h;//2048;
     fmt.fmt.pix.pixelformat=pixel_format;
     fmt.fmt.pix.field=V4L2_FIELD_NONE;
 
@@ -362,7 +388,7 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
 
     PRINT(bytes_per_pixel,"%d");
 
-    enqueue_all(cd.fd);
+    // enqueue_all(cd.fd);
 
     // cd.draw_buf=malloc(4*fmt.fmt.pix.width*fmt.fmt.pix.height);
     cudaMallocManaged(&cd.draw_buf,2*4*fmt.fmt.pix.width*fmt.fmt.pix.height);
@@ -377,7 +403,7 @@ cam_data_t init_cam(const char *dev_name,bool use_yuv){
     }
 
     glGenTextures(1, &cd.tex_id);
-    assert(cd.tex_id>0);
+    // assert(cd.tex_id>0);
     glBindTexture(GL_TEXTURE_2D, cd.tex_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, cd.w, cd.h, 0, GL_RGBA, GL_UNSIGNED_BYTE,cd.draw_buf);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);

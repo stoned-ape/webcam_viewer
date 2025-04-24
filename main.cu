@@ -56,33 +56,10 @@ void make_bmp(const char *file_name,int width,int height,void *pixels){
 }
 
 
-int start_stream(int fd){
-    
-    enum v4l2_buf_type type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    return SYSCALL(ioctl(fd,VIDIOC_STREAMON,&type));
-}
 
-int set_trigger_mode(int fd,bool mode,bool ref_cam){
-    struct v4l2_control control;
-    if(ref_cam){ 
-        //backlight_compensation
-        control.value=2*mode+1;// 1,2,3
-        control.id=0x0098091c;
-    }else{ 
-        // 0: Master Mode
-        // 1: Trigger Exposure
-        // 2: Trigger Aquisition
-        control.value=mode*2;
-        control.id=0x009a092d;
-    }
-    return SYSCALL(ioctl(fd,VIDIOC_S_CTRL,&control));
-}
 
-int stop_stream(int fd){
-    // set_trigger_mode(fd,0);
-    enum v4l2_buf_type type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    return SYSCALL(ioctl(fd,VIDIOC_STREAMOFF,&type));
-}
+
+
 
 struct irect{
     int2 pos;
@@ -128,7 +105,7 @@ int main(){
 
     static struct{char name[16];char card[32];} devs_info[10]={0};
     int devs_count=0;
-    int devs_select=3;
+    int devs_select=2;
     bool use_yuv=false;
 
     #define MAX_DEVS 10
@@ -326,14 +303,37 @@ int main(){
 
     puts((const char *)glGetString(GL_VERSION));
 
-    cam_data_t cd=init_cam(devs_info[devs_select].name,use_yuv);
+    int cam_w=2432;
+    int cam_h=2048;
+
+    cam_data_t cd=init_cam(devs_info[devs_select].name,use_yuv,cam_w,cam_h);
 
     zoomer_t zoomer;
     zoomer_init(&zoomer,make__float2(1,1),make__float2(1,1));
 
+    // double sum=0;
+    // for(int j=0;j<10;j++){
+    //     set_exposure_ms(cd.fd,30);
+    //     for(int i=0;i<3;i++) enqueue_buf(cd.fd,i);
+    //     double t0=itime();
+    //     start_stream(cd.fd);
+    //     for(int i=0;i<3;i++){
+    //         int idx=dequeue_buf(cd.fd);
+    //         assert(idx==i);
+    //     }
+    //     double t1=itime();
+    //     stop_stream(cd.fd);
+    //     lprintln(t1-t0);
+    //     sum+=t1-t0;
+    // }
+    // lprintln(sum/10);
+
+    // return 0;
+
 
     bool is_streaming=false;
     if(cd.valid){
+        enqueue_all(cd.fd);
         set_trigger_mode(cd.fd,trigger_mode,cd.ref_cam);
 
         start_stream(cd.fd);
@@ -449,9 +449,10 @@ int main(){
                 }
                 if(!is_streaming){
                     if(cd.valid) deinit_cam(&cd);
-                    cd=init_cam(devs_info[devs_select].name,use_yuv);
+                    cd=init_cam(devs_info[devs_select].name,use_yuv,cam_w,cam_h);
 
                     if(cd.valid){
+                        enqueue_all(cd.fd);
                         start_stream(cd.fd);
                         is_streaming=true;
                         draw_cam_info(display,info_window,gc,&cd);
@@ -491,9 +492,10 @@ int main(){
                 }
                 if(!is_streaming){
                     if(cd.valid) deinit_cam(&cd);
-                    cd=init_cam(devs_info[i].name,use_yuv);
+                    cd=init_cam(devs_info[i].name,use_yuv,cam_w,cam_h);
 
                     if(cd.valid){
+                        enqueue_all(cd.fd);
                         start_stream(cd.fd);
                         is_streaming=true;
 
@@ -532,6 +534,7 @@ int main(){
         // int idx=0;
         if(is_streaming){
 
+            assert(!trigger_mode);
             
             if(trigger_mode){
                 usleep(1e4); 

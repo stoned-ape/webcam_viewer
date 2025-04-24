@@ -25,10 +25,15 @@ typedef struct{
     struct v4l2_format fmt;
 }cam_data_t;
 
+int start_stream(int fd);
+int stop_stream(int fd);
+
+int set_trigger_mode(int fd,bool mode,bool ref_cam);
+
 
 void deinit_cam(cam_data_t *cd);
 void draw_cam_info(Display *display,Window info_window,GC gc,cam_data_t *cd);
-cam_data_t init_cam(const char *dev_name,bool use_yuv);
+cam_data_t init_cam(const char *dev_name,bool use_yuv,int w,int h);
 
 void enqueue_buf(int fd,int idx);
 int dequeue_buf(int fd);
